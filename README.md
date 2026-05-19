@@ -33,8 +33,15 @@ uv sync
 # Or manually: pip install -e .
 ```
 
+**Prepare the Data Directory:**
+Since raw data and databases are not pushed to GitHub, you need to create the directory structure manually. In the root of the project, create the data folders:
+```powershell
+mkdir data
+mkdir data/jsons
+```
+*(Place all your transcript JSON files into the `data/jsons/` folder).*
+
 **Run the Incremental Ingestion Pipeline:**
-Place all your transcript JSON files into the `data/jsons/` folder, then run:
 ```powershell
 uv run python ingest.py
 ```
