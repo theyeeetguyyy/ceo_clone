@@ -1,0 +1,42 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.env
+.env.*
+*.env
+
+# Databases and Vector Stores
+data/*.db
+data/*.pkl
+data/vector_store/
+data/memory_store/
+data/oldjson/
+data/jsons/
+data/govind_persona.json
+data/ingest_ledger.db
+
+data/ingest_ledger.db-journal
+phase2txt/
+instructions.txt
+
+# Logs
+logs/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# OS / IDEs
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db

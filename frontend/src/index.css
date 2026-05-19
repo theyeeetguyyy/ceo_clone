@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-white/70 backdrop-blur-md border border-slate-200/60 shadow-[0_8px_30px_rgb(0,0,0,0.04)];
+  }
+  
+  .glass-button {
+    @apply bg-white/60 hover:bg-white/90 backdrop-blur-sm border border-slate-200/80 transition-all duration-200;
+  }
+  
+  /* Markdown Styles */
+  .prose-custom p {
+    @apply mb-4 leading-relaxed;
+  }
+  .prose-custom p:last-child {
+    @apply mb-0;
+  }
+  .prose-custom strong {
+    @apply font-semibold text-slate-900;
+  }
+  .prose-custom ul {
+    @apply list-disc list-inside mb-4 space-y-1;
+  }
+  .prose-custom ol {
+    @apply list-decimal list-inside mb-4 space-y-1;
+  }
+  .prose-custom h1, .prose-custom h2, .prose-custom h3 {
+    @apply font-semibold text-slate-900 mt-6 mb-3;
+  }
+  .prose-custom blockquote {
+    @apply border-l-4 border-blue-500 pl-4 italic text-slate-600 my-4 bg-slate-50/50 py-1;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
