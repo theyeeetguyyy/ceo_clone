@@ -7,7 +7,6 @@ import App from './App.tsx'
 import './index.css'
 
 if (typeof window !== 'undefined') {
-  console.log("🔍 POSTHOG DEBUG KEY:", import.meta.env.VITE_POSTHOG_KEY);
   posthog.init(import.meta.env.VITE_POSTHOG_KEY, {
     api_host: import.meta.env.VITE_POSTHOG_HOST || 'https://us.i.posthog.com',
     person_profiles: 'identified_only',
