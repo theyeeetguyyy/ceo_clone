@@ -193,11 +193,11 @@ limiter = Limiter(key_func=get_remote_address)
 
 @router.post("/stream")
 @limiter.limit("10/minute")
-async def chat_stream(request: ChatRequest, req: Request):
+async def chat_stream(request: Request, chat_req: ChatRequest):
     """Primary SSE streaming endpoint. Rate limited: 10 requests/min per IP."""
-    log.info(f"Chat stream | mode={request.mode} | q='{request.question[:60]}'")
+    log.info(f"Chat stream | mode={chat_req.mode} | q='{chat_req.question[:60]}'")
     return StreamingResponse(
-        _sse_stream(request),
+        _sse_stream(chat_req),
         media_type="text/event-stream",
         headers={
             "Cache-Control":    "no-cache",
@@ -209,10 +209,10 @@ async def chat_stream(request: ChatRequest, req: Request):
 
 @router.post("/")
 @limiter.limit("10/minute")
-async def chat(request: ChatRequest, req: Request):
+async def chat(request: Request, chat_req: ChatRequest):
     """Non-streaming fallback endpoint. Rate limited: 10 requests/min per IP."""
-    log.info(f"Chat | mode={request.mode} | q='{request.question[:60]}'")
-    return await _run_agent(request)
+    log.info(f"Chat | mode={chat_req.mode} | q='{chat_req.question[:60]}'")
+    return await _run_agent(chat_req)
 
 
 @router.get("/history/{session_id}")

@@ -22,7 +22,7 @@ MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10 MB
 
 @router.post("/transcribe")
 @limiter.limit("5/minute")
-async def transcribe_audio(req: Request, audio: UploadFile = File(...)):
+async def transcribe_audio(request: Request, audio: UploadFile = File(...)):
     """
     Transcribe audio using Groq Whisper API.
     Returns the transcript text.
