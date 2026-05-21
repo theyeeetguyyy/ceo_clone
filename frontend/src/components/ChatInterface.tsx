@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Mic, Square, Trash2, VolumeX } from 'lucide-react';
+import { usePostHog } from 'posthog-js/react';
 import { useSSEStream } from '../hooks/useSSEStream';
 import { useVoice } from '../hooks/useVoice';
 import MessageBubble from './MessageBubble';
@@ -10,11 +11,13 @@ export default function ChatInterface() {
   const bottomRef = useRef<HTMLDivElement>(null);
   
   const { messages, isGenerating, sendMessage, stopGeneration, clearHistory } = useSSEStream();
+  const posthog = usePostHog();
   
   // Voice integration
   const { isRecording, toggleRecording, speak, stopSpeaking } = useVoice((text, voiceMode) => {
     setIsVoiceMode(voiceMode);
     sendMessage(text, voiceMode ? 'voice' : 'text');
+    posthog?.capture('Asked Question', { question: text, mode: voiceMode ? 'voice' : 'text' });
   });
 
   // Speak completed messages if in voice mode
@@ -38,6 +41,7 @@ export default function ChatInterface() {
     e?.preventDefault();
     if (!input.trim() || isGenerating) return;
     sendMessage(input, 'text');
+    posthog?.capture('Asked Question', { question: input, mode: 'text' });
     setInput('');
   };
 
