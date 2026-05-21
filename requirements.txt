@@ -2,7 +2,7 @@ langchain==0.3.25
 langchain-core==0.3.72
 langchain-community==0.3.24
 sentence-transformers==4.1.0
-chromadb==1.0.7
+chromadb==0.5.5
 langchain-text-splitters==0.3.8
 langchain-groq==0.3.2
 python-dotenv==1.1.0
