@@ -1,3 +1,13 @@
+---
+title: CEO Digital Twin
+emoji: 🧠
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # CEO Digital Twin 
 
 This project contains the production-grade **Agentic 3-DB RAG** implementation.
