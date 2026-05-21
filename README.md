@@ -71,4 +71,4 @@ npm run dev
 1. **Text Chat:** Type your message and hit Enter. The response will stream in real-time.
 2. **Voice Chat:** Click the **Mic** icon. Speak your question. The system will transcribe it using Groq Whisper, generate a concise spoken-style response, and read it back to you.
 3. **Contextual Follow-ups:** Click on the suggested follow-up chips at the bottom of a response to dive deeper. These are dynamically generated based on the retrieved facts.
-4. **Transparent Sourcing:** Expand the "Sources Retrieved" accordion on any message to see exactly which transcript chunks (with confidence scores, source DB, and dates) the agent used to formulate its response.
+4. **Transparent Sourcing:** Expand the "Sources Retrieved" accordion on any message to see exactly which transcript chunks (with confidence scores, source DB, and dates) the agent used to formulate its response...
