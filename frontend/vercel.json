@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://REPLACE_WITH_YOUR_HF_SPACE_URL.hf.space/api/$1"
+      "destination": "https://theyeetguy-ceo-clone.hf.space/api/$1"
     },
     {
       "source": "/(.*)",
