@@ -15,4 +15,4 @@ python-multipart==0.0.20
 pydantic==2.11.4
 groq==0.25.0
 slowapi==0.1.9
-numpy==2.2.6
+numpy==1.26.4
