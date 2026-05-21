@@ -24,7 +24,7 @@ export function useVoice(onTranscribed: (text: string, isVoiceMode: boolean) => 
         formData.append('audio', audioBlob, 'recording.webm');
 
         try {
-          const res = await fetch('http://localhost:8000/api/voice/transcribe', {
+          const res = await fetch('/api/voice/transcribe', {
             method: 'POST',
             body: formData,
           });
