@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { User, ChevronDown, ChevronUp, Zap, FileText } from 'lucide-react';
+import { ChevronDown, ChevronUp, Zap, FileText } from 'lucide-react';
 import { Message } from '../types';
 
 interface Props {

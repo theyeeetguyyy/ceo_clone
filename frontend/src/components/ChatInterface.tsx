@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Mic, Square, Trash2, Volume2, VolumeX } from 'lucide-react';
+import { Send, Mic, Square, Trash2, VolumeX } from 'lucide-react';
 import { useSSEStream } from '../hooks/useSSEStream';
 import { useVoice } from '../hooks/useVoice';
 import MessageBubble from './MessageBubble';
