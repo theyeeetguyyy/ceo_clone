@@ -69,7 +69,10 @@ export default function ChatInterface() {
           </div>
         ) : (
           messages.map(msg => (
-            <MessageBubble key={msg.id} message={msg} onFollowUpClick={(q) => sendMessage(q, 'text')} />
+            <MessageBubble key={msg.id} message={msg} onFollowUpClick={(q) => {
+              sendMessage(q, 'text');
+              posthog?.capture('Asked Question', { question: q, mode: 'follow_up' });
+            }} />
           ))
         )}
         <div ref={bottomRef} />

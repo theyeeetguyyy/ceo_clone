@@ -4,7 +4,6 @@ Every module should do:  from backend.utils.logger import get_logger; log = get_
 """
 
 import sys
-import json
 from pathlib import Path
 from loguru import logger
 
@@ -29,23 +28,16 @@ logger.add(
     colorize=True,
 )
 
-# ─── JSONL file sink (machine-readable trace) ─────────────────────────────────
-def _json_sink(message):
-    record = message.record
-    entry = {
-        "timestamp": record["time"].isoformat(),
-        "level": record["level"].name,
-        "module": record["name"],
-        "function": record["function"],
-        "line": record["line"],
-        "message": record["message"],
-        "extra": record["extra"],
-    }
-    with open(TRACE_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, default=str) + "\n")
-
-
-logger.add(_json_sink, level="DEBUG", enqueue=True)
+# ─── JSONL file sink (machine-readable trace, with rotation) ──────────────────
+logger.add(
+    str(TRACE_FILE),
+    level="DEBUG",
+    format="{message}",
+    serialize=True,
+    rotation="50 MB",
+    retention=3,
+    enqueue=True,
+)
 
 
 def get_logger(name: str):

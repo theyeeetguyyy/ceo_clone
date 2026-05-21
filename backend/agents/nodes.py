@@ -155,7 +155,7 @@ async def hybrid_retriever(state: AgentState) -> dict:
     retriever = get_retriever()
 
     # Run in executor to avoid blocking event loop (CrossEncoder is CPU-bound)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fact_res, style_res, reasoning_res = await loop.run_in_executor(
         None, retriever.retrieve_typed, sub_queries
     )

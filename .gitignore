@@ -12,6 +12,7 @@ wheels/
 .env
 .env.*
 *.env
+/frontend/.env
 
 # Databases and Vector Stores
 data/*.db

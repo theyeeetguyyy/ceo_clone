@@ -91,7 +91,7 @@ class GroqKeyPool:
                 continue
 
             try:
-                client = AsyncGroq(api_key=key)
+                client = AsyncGroq(api_key=key, timeout=30.0)
                 log.debug(f"Using key ...{key[-6:]} | model={model} | attempt={attempt+1}")
                 response = await client.chat.completions.create(
                     model=model,

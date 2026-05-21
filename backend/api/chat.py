@@ -17,9 +17,11 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from backend.agents.graph import get_graph
 from backend.agents.graph_state import AgentState
@@ -91,7 +93,7 @@ def _clear_session(session_id: str):
 # ── Pydantic models ────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    question: str
+    question: str = Field(..., max_length=2000)
     session_id: Optional[str] = None
     mode: str = "text"  # "text" | "voice"
 
@@ -186,9 +188,13 @@ async def _sse_stream(request: ChatRequest) -> AsyncGenerator[str, None]:
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
+limiter = Limiter(key_func=get_remote_address)
+
+
 @router.post("/stream")
-async def chat_stream(request: ChatRequest):
-    """Primary SSE streaming endpoint."""
+@limiter.limit("10/minute")
+async def chat_stream(request: ChatRequest, req: Request):
+    """Primary SSE streaming endpoint. Rate limited: 10 requests/min per IP."""
     log.info(f"Chat stream | mode={request.mode} | q='{request.question[:60]}'")
     return StreamingResponse(
         _sse_stream(request),
@@ -202,8 +208,9 @@ async def chat_stream(request: ChatRequest):
 
 
 @router.post("/")
-async def chat(request: ChatRequest):
-    """Non-streaming fallback endpoint."""
+@limiter.limit("10/minute")
+async def chat(request: ChatRequest, req: Request):
+    """Non-streaming fallback endpoint. Rate limited: 10 requests/min per IP."""
     log.info(f"Chat | mode={request.mode} | q='{request.question[:60]}'")
     return await _run_agent(request)
 
