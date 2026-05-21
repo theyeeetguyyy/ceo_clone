@@ -15,16 +15,16 @@ wheels/
 /frontend/.env
 
 # Databases and Vector Stores
-data/*.db
-data/*.pkl
-data/vector_store/
-data/memory_store/
+# data/*.db
+# data/*.pkl
+# data/vector_store/
+# data/memory_store/
 data/oldjson/
 data/jsons/
 data/govind_persona.json
-data/ingest_ledger.db
+# data/ingest_ledger.db
 
-data/ingest_ledger.db-journal
+# data/ingest_ledger.db-journal
 phase2txt/
 instructions.txt
 
