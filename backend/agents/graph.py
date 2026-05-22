@@ -14,7 +14,7 @@ Graph flow:
                                              [loop_count >= MAX] → generator (with weak context)
 """
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, START
 from backend.agents.graph_state import AgentState
 from backend.agents.nodes import (
     semantic_router,
@@ -86,8 +86,8 @@ def build_graph() -> StateGraph:
     workflow.add_node("hallucination_checker", hallucination_checker)
     workflow.add_node("follow_up_agent", follow_up_agent)
 
-    # Entry point
-    workflow.set_entry_point("semantic_router")
+    # Entry point (langgraph 1.x: add_edge from START instead of set_entry_point)
+    workflow.add_edge(START, "semantic_router")
 
     # Semantic router conditional edges
     workflow.add_conditional_edges(
