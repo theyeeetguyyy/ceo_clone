@@ -5,7 +5,16 @@ colorFrom: blue
 colorTo: indigo
 sdk: docker
 app_port: 7860
+app_file: Dockerfile
 pinned: false
+tags:
+  - rag
+  - langchain
+  - langgraph
+  - fastapi
+  - groq
+  - sentence-transformers
+  - chromadb
 ---
 
 # CEO Digital Twin 

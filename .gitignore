@@ -1,3 +1,7 @@
+# ══════════════════════════════════════════════════════════
+# CEO Digital Twin — .gitignore
+# ══════════════════════════════════════════════════════════
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -8,32 +12,41 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+env/
 
+# Secrets — NEVER commit these
 .env
-.env.*
 *.env
+# .env.example is safe to commit (no real keys)
+!.env.example
 
-# Databases and Vector Stores
-data/*.db
-data/*.pkl
-data/vector_store/
-data/memory_store/
+# ── Data we DO want in git (via LFS for large files) ──────────
+# DO NOT gitignore these — they must be in the HF repo for the
+# Space to function. LFS handles the size.
+# data/vector_store/    ← TRACKED via LFS
+# data/*.db             ← TRACKED via LFS
+# data/*.pkl            ← TRACKED via LFS
+# data/govind_persona.json ← TRACKED (not sensitive)
+
+# ── Raw source data (NOT needed in HF Space) ──────────────────
 data/oldjson/
 data/jsons/
-data/govind_persona.json
-data/ingest_ledger.db
 
-data/ingest_ledger.db-journal
+# ── Ephemeral data (regenerated at runtime) ──────────────────
+data/memory_store/
+data/sessions.db
+logs/
+
+# Phase 2 source material (large, not needed in Space)
 phase2txt/
 instructions.txt
 
-# Logs
-logs/
-
-# Node / Frontend
+# Node / Frontend (built separately on Vercel)
 node_modules/
 frontend/node_modules/
 frontend/dist/
+frontend/.env
 
 # OS / IDEs
 .DS_Store

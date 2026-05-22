@@ -1,0 +1,37 @@
+# Git & version control
+.git/
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+*.egg-info
+
+# Environment & secrets
+.env
+.env.*
+
+# Frontend (not needed in backend Docker image)
+frontend/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs (regenerated at runtime)
+logs/
+
+# Dev files
+*.md
+phase2txt/
+instructions.txt
+ingest.py
+pyproject.toml
+uv.lock
