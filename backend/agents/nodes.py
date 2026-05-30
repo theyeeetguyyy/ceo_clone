@@ -22,6 +22,7 @@ from backend.core.prompt import (
     DOC_GRADER_PROMPT, QUERY_REWRITER_PROMPT,
     HALLUCINATION_CHECKER_PROMPT, FOLLOW_UP_PROMPT,
     QUERY_PLANNER_PROMPT, SEMANTIC_ROUTER_PROMPT,
+    CLARIFICATION_PROMPT,
 )
 from backend.core.rag_pipeline import get_retriever, get_persona_quotes
 from backend.memory.memory_manager import get_memory
@@ -94,20 +95,27 @@ async def semantic_router(state: AgentState) -> dict:
         return {"routing": "injection"}
 
     pool = get_pool()
+    _fallback = False
     try:
         routing = await pool.chat(
             messages=[{"role": "user", "content": SEMANTIC_ROUTER_PROMPT.format(question=question)}],
             model=FAST_MODEL, temperature=0.0, max_tokens=10,
         )
         routing = routing.strip().lower()
-        if routing not in ("vectorstore", "direct", "injection"):
-            routing = "vectorstore"
+        if routing not in ("vectorstore", "direct", "casual", "unsafe", "ambiguous", "injection"):
+            routing = "direct"
+            _fallback = True
     except Exception as e:
-        log.error(f"Router failed → defaulting to vectorstore: {e}")
-        routing = "vectorstore"
+        log.error(f"Router failed → defaulting to direct: {e}")
+        routing = "direct"
+        _fallback = True
 
     log.info(f"Router → '{routing}' | {time.monotonic()-t0:.2f}s")
-    return {"routing": routing}
+    result = {"routing": routing}
+    if _fallback:
+        result["degraded"] = True
+        result["fallback_count"] = state.get("fallback_count", 0) + 1
+    return result
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -214,7 +222,8 @@ async def doc_grader(state: AgentState) -> dict:
         log.warning("No documents to grade.")
         return {"doc_grade": "insufficient", "documents": []}
 
-    async def grade_one(doc: Document) -> bool:
+    async def grade_one(doc: Document) -> str:
+        """Returns 'relevant', 'irrelevant', or 'unknown' (on LLM error)."""
         try:
             verdict = await pool.chat(
                 messages=[{"role": "user", "content": DOC_GRADER_PROMPT.format(
@@ -222,21 +231,41 @@ async def doc_grader(state: AgentState) -> dict:
                 )}],
                 model=FAST_MODEL, temperature=0.0, max_tokens=5,
             )
-            return "relevant" in verdict.strip().lower()
+            v = verdict.strip().lower()
+            return "relevant" if "relevant" in v and "irrelevant" not in v else "irrelevant"
         except Exception as e:
             log.warning(f"Grade failed for a doc: {e}")
-            return True  # include on error to avoid losing context
+            return "unknown"
 
-    # BUG FIX: run all grades concurrently
+    # Run all grades concurrently
     verdicts = await asyncio.gather(*[grade_one(doc) for doc in documents])
-    relevant = [doc for doc, ok in zip(documents, verdicts) if ok]
+    relevant = [doc for doc, v in zip(documents, verdicts) if v == "relevant"]
+    unknown_count = sum(1 for v in verdicts if v == "unknown")
+    irrelevant_count = len(documents) - len(relevant) - unknown_count
 
-    # Need at least 2 relevant fact-style docs for sufficient grade
+    # Need at least 2 confirmed relevant docs for sufficient grade
+    # Unknown docs are excluded from both counts — they don't poison either direction
     grade = "sufficient" if len(relevant) >= 2 else "insufficient"
+
+    # Track grader health for epistemic telemetry
+    if unknown_count == len(documents):
+        grader_health = "failed"
+    elif unknown_count > 0:
+        grader_health = "degraded"
+        log.warning(f"Grader health: {unknown_count}/{len(documents)} docs returned 'unknown' (LLM errors)")
+    else:
+        grader_health = "healthy"
+
     log.info(
-        f"Grader: {len(relevant)}/{len(documents)} relevant → '{grade}' | {time.monotonic()-t0:.2f}s"
+        f"Grader: {len(relevant)} relevant, {unknown_count} unknown, "
+        f"{irrelevant_count} irrelevant → '{grade}' | {time.monotonic()-t0:.2f}s"
     )
-    return {"doc_grade": grade, "documents": relevant}
+    return {
+        "doc_grade": grade,
+        "documents": relevant,
+        "grader_health": grader_health,
+        "degraded": state.get("degraded", False) or grader_health != "healthy",
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -324,7 +353,7 @@ async def generator(state: AgentState) -> dict:
     ]
 
     # Try primary model, fall back gracefully
-    for model in [PRIMARY_GEN, FALLBACK_GEN]:
+    for i, model in enumerate([PRIMARY_GEN, FALLBACK_GEN]):
         try:
             generation = await pool.chat(
                 messages=messages,
@@ -336,27 +365,45 @@ async def generator(state: AgentState) -> dict:
                 f"Generated | model={model} mode={mode} "
                 f"len={len(generation)} | {time.monotonic()-t0:.2f}s"
             )
-            return {"generation": generation}
+            result = {"generation": generation}
+            if i > 0:  # Fell back to secondary model
+                result["degraded"] = state.get("degraded", False) or True
+                result["fallback_count"] = state.get("fallback_count", 0) + 1
+            return result
         except Exception as e:
             log.warning(f"Generator failed with {model}: {e}")
 
     log.error("All generation models failed.")
-    return {"generation": "I apologise — I'm having a technical issue right now. Please try again shortly."}
+    return {
+        "generation": "I apologise — I'm having a technical issue right now. Please try again shortly.",
+        "degraded": True,
+        "fallback_count": state.get("fallback_count", 0) + 1,
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # NODE 7 — Hallucination Checker (Self-RAG)
 # ════════════════════════════════════════════════════════════════════════════
 async def hallucination_checker(state: AgentState) -> dict:
-    """Verify generated answer is grounded in fact_docs (not style/reasoning)."""
-    fact_docs  = state.get("fact_docs", state.get("documents", []))
+    """Verify generated answer is grounded in fact_docs AND reasoning_docs.
+    Style_docs are excluded — they inform tone, not verifiable claims.
+    """
+    fact_docs = state.get("fact_docs", [])
+    reasoning_docs = state.get("reasoning_docs", [])
     generation = state.get("generation", "")
     t0 = time.monotonic()
 
-    if not fact_docs or not generation:
+    grounding_docs = fact_docs + reasoning_docs
+    if not grounding_docs or not generation:
         return {"hallucination_score": "skip"}
 
-    context = "\n\n".join([d.page_content[:400] for d in fact_docs[:4]])
+    # Facts get primary space, reasoning supplements
+    fact_context = "\n\n".join([d.page_content[:400] for d in fact_docs[:4]])
+    reasoning_context = "\n\n".join([d.page_content[:300] for d in reasoning_docs[:2]])
+    context = fact_context
+    if reasoning_context:
+        context += f"\n\n--- REASONING CONTEXT ---\n{reasoning_context}"
+
     pool = get_pool()
 
     try:
@@ -372,12 +419,16 @@ async def hallucination_checker(state: AgentState) -> dict:
         score = "skip"
 
     log.info(f"Hallucination → '{score}' | {time.monotonic()-t0:.2f}s")
-    
+
     current_retries = state.get("hallucination_retries", 0)
-    return {
+    result = {
         "hallucination_score": score,
-        "hallucination_retries": current_retries + 1 if score == "hallucinated" else current_retries
+        "hallucination_retries": current_retries + 1 if score == "hallucinated" else current_retries,
     }
+    if score == "skip":
+        result["degraded"] = state.get("degraded", False) or True
+        result["fallback_count"] = state.get("fallback_count", 0) + 1
+    return result
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -476,5 +527,147 @@ async def injection_handler(state: AgentState) -> dict:
         "final_answer": INJECTION_RESPONSE,
         "follow_up_questions": [], "sources": [],
         "hallucination_score": "skip",
+        "fact_docs": [], "style_docs": [], "reasoning_docs": [],
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# NODE 3.5 — Confidence Gate (circuit breaker between retrieval and grading)
+# ════════════════════════════════════════════════════════════════════════════
+CONFIDENCE_THRESHOLD = 0.30
+
+
+async def confidence_gate(state: AgentState) -> dict:
+    """Circuit breaker: if retrieval confidence is below threshold,
+    skip the entire RAG pipeline and route to direct response.
+    Preserves separation of concerns — retriever retrieves, gate decides.
+    """
+    confidence = state.get("confidence", 0.0)
+    fact_count = len(state.get("fact_docs", []))
+
+    # Determine retrieval quality band
+    if confidence >= 0.7:
+        quality = "high"
+    elif confidence >= CONFIDENCE_THRESHOLD:
+        quality = "medium"
+    else:
+        quality = "low"
+
+    if confidence < CONFIDENCE_THRESHOLD:
+        log.warning(
+            f"Confidence gate: {confidence:.3f} < {CONFIDENCE_THRESHOLD} "
+            f"(facts={fact_count}) → bypassing RAG"
+        )
+        return {"doc_grade": "low_confidence", "retrieval_quality": quality}
+
+    log.debug(f"Confidence gate: {confidence:.3f} ({quality}) → proceeding to grader")
+    return {"doc_grade": "pending", "retrieval_quality": quality}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Terminal — Casual Response (no retrieval needed)
+# ════════════════════════════════════════════════════════════════════════════
+async def casual_response(state: AgentState) -> dict:
+    """Handle casual/creative/conversational requests in-persona without retrieval."""
+    question = state["question"]
+    pool = get_pool()
+    persona_quotes = get_persona_quotes()
+    system = MASTER_PROMPTT.format(
+        persona_quotes=persona_quotes,
+        fact_context="",
+        reasoning_context="",
+        style_context="",
+    )
+    system += (
+        "\n\nThis is a casual, conversational question. Respond warmly as Govind "
+        "would in a relaxed meeting — brief, human, no business data needed. Stay in character."
+    )
+    try:
+        generation = await pool.chat(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": question},
+            ],
+            model=FAST_MODEL, temperature=0.6, max_tokens=300,
+        )
+    except Exception as e:
+        log.error(f"Casual response failed: {e}")
+        generation = (
+            "Ha, that's a good one. But let's talk business — "
+            "what do you want to know about Anaxee?"
+        )
+
+    return {
+        "generation": generation, "final_answer": generation,
+        "follow_up_questions": [], "sources": [],
+        "fact_docs": [], "style_docs": [], "reasoning_docs": [],
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Terminal — Ambiguous Response (multi-turn clarification)
+# ════════════════════════════════════════════════════════════════════════════
+async def ambiguous_response(state: AgentState) -> dict:
+    """Handle vague or underspecified queries — ask targeted clarifying questions.
+    Uses LLM to generate contextually relevant clarification as Govind.
+    Supports multi-turn: when user responds, session history carries context forward.
+    """
+    question = state["question"]
+    history = state.get("history", [])
+    t0 = time.monotonic()
+    pool = get_pool()
+
+    # Build history section for context-aware clarification
+    history_section = ""
+    if history:
+        history_lines = []
+        for h in history[-6:]:  # Last 3 exchanges max
+            role = "Govind" if h["role"] == "assistant" else "User"
+            history_lines.append(f"{role}: {h['content'][:200]}")
+        history_section = "Recent conversation:\n" + "\n".join(history_lines)
+
+    try:
+        raw = await pool.chat(
+            messages=[{"role": "user", "content": CLARIFICATION_PROMPT.format(
+                question=question,
+                history_section=history_section,
+            )}],
+            model=FAST_MODEL, 
+            temperature=0.4, 
+            max_tokens=400,
+            response_format={"type": "json_object"},
+        )
+        raw = raw.strip()
+
+        # Parse JSON response
+        if "```" in raw:
+            raw = raw.split("```")[1].strip().lstrip("json").strip()
+
+        parsed = json.loads(raw)
+        generation = parsed.get("message", raw)
+        chips = parsed.get("chips", [])
+        if not isinstance(chips, list):
+            chips = []
+        chips = [str(c) for c in chips[:3]]
+
+    except (json.JSONDecodeError, Exception) as e:
+        log.warning(f"Ambiguous response LLM/parse failed: {e}")
+        generation = (
+            "I want to give you a proper answer, but I need a bit more context. "
+            "What industry are you in, and what specific challenge are you trying to solve? "
+            "That will help me give you something actionable."
+        )
+        chips = [
+            "How does Anaxee help FMCG brands?",
+            "What does Anaxee do in Tier 2/3 cities?",
+        ]
+
+    log.info(f"Ambiguous response | chips={len(chips)} | {time.monotonic()-t0:.2f}s")
+
+    return {
+        "generation": generation,
+        "final_answer": generation,
+        "follow_up_questions": chips,
+        "sources": [],
         "fact_docs": [], "style_docs": [], "reasoning_docs": [],
     }

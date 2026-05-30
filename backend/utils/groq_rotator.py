@@ -69,6 +69,7 @@ class GroqKeyPool:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         max_retries: int = 5,
+        response_format: Optional[dict] = None,
     ) -> str:
         """
         Send a chat completion request, rotating keys on rate-limit errors.
@@ -93,12 +94,17 @@ class GroqKeyPool:
             try:
                 client = AsyncGroq(api_key=key, timeout=30.0)
                 log.debug(f"Using key ...{key[-6:]} | model={model} | attempt={attempt+1}")
-                response = await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+                
+                kwargs = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if response_format:
+                    kwargs["response_format"] = response_format
+
+                response = await client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content
                 log.debug(f"Response received ({len(content)} chars)")
                 return content
@@ -115,8 +121,14 @@ class GroqKeyPool:
                     self._put_key_on_cooldown(key, seconds=60.0)
                     last_error = e
                     attempt += 1
+                elif e.status_code in (401, 403):
+                    log.error(f"Invalid API Key (401/403) ...{key[-6:]}: {e}")
+                    # Put it in "permanent" penalty box so we don't try it again
+                    self._put_key_on_cooldown(key, seconds=999999.0)
+                    last_error = e
+                    attempt += 1
                 else:
-                    log.error(f"Groq API error (non-429): {e}")
+                    log.error(f"Groq API error (non-429/401): {e}")
                     raise
 
             except Exception as e:

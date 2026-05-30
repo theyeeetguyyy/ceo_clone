@@ -20,7 +20,7 @@ class AgentState(TypedDict):
     history: List[dict]         # Conversation history [{role, content}]
 
     # ─── Planning ─────────────────────────────────────────────────────────
-    routing: str                # "vectorstore" | "direct" | "injection"
+    routing: str                # "vectorstore" | "direct" | "casual" | "unsafe" | "ambiguous" | "injection"
     sub_queries: List[str]      # Decomposed sub-queries from query planner
 
     # ─── Typed Retrieval Pools (v2 — 3-DB architecture) ──────────────────
@@ -44,3 +44,9 @@ class AgentState(TypedDict):
     follow_up_questions: List[str]  # 2 proactive follow-up question chips
     sources: List[dict]         # Source metadata for UI accordion
     confidence: float           # Sigmoid-normalised retrieval confidence [0, 1]
+
+    # ─── Epistemic Telemetry (internal quality signals) ───────────────────
+    fallback_count: int         # How many nodes used fallback/error path
+    retrieval_quality: str      # "high" (>0.7) | "medium" (0.3–0.7) | "low" (<0.3) | "none"
+    grader_health: str          # "healthy" | "degraded" (some unknowns) | "failed" (all unknown)
+    degraded: bool              # True if any node took a fallback/error path

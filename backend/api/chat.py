@@ -125,6 +125,11 @@ async def _run_agent(request: ChatRequest) -> dict:
         "follow_up_questions": [],
         "sources":           [],
         "confidence":        0.0,
+        "hallucination_retries": 0,
+        "fallback_count":    0,
+        "retrieval_quality": "none",
+        "grader_health":     "healthy",
+        "degraded":          False,
     }
 
     graph = get_graph()
@@ -149,6 +154,12 @@ async def _run_agent(request: ChatRequest) -> dict:
         "confidence":          round(result.get("confidence", 0.0), 3),
         "routing":             result.get("routing", ""),
         "latency":             round(latency, 2),
+        "quality": {
+            "retrieval_quality": result.get("retrieval_quality", "none"),
+            "grader_health":     result.get("grader_health", "healthy"),
+            "degraded":          result.get("degraded", False),
+            "fallback_count":    result.get("fallback_count", 0),
+        },
     }
 
 
