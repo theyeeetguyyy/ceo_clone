@@ -27,7 +27,7 @@ limiter = Limiter(key_func=get_remote_address)
 _startup_status: dict = {
     "retriever": False,
     "memory": False,
-    "groq_pool": False,
+    "gemini_client": False,
     "graph": False,
 }
 
@@ -62,16 +62,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning(f"   MemoryManager warm-up failed: {e}")
 
-    log.info("   Warming up Groq Key Pool...")
+    log.info("   Warming up Gemini Client...")
     try:
-        from backend.utils.groq_rotator import get_pool
+        from backend.utils.gemini_client import get_pool
         get_pool()
-        _startup_status["groq_pool"] = True
-        log.success("   Groq Key Pool ready.")
+        _startup_status["gemini_client"] = True
+        log.success("   Gemini Client ready.")
     except Exception as e:
         log.error(
-            f"   Groq Key Pool failed: {e}\n"
-            "   ⚠️  Make sure GROQ_API_KEYS is set in HF Spaces Secrets!"
+            f"   Gemini Client failed: {e}\n"
+            "   ⚠️  Make sure GEMINI_API_KEY is set in .env!"
         )
 
     log.info("   Compiling LangGraph...")
@@ -159,10 +159,10 @@ async def health():
         checks["memory"] = False
 
     try:
-        from backend.utils.groq_rotator import get_pool
-        checks["groq_pool"] = get_pool() is not None
+        from backend.utils.gemini_client import get_pool
+        checks["gemini_client"] = get_pool() is not None
     except Exception:
-        checks["groq_pool"] = False
+        checks["gemini_client"] = False
 
     try:
         from backend.agents.graph import get_graph
@@ -170,8 +170,8 @@ async def health():
     except Exception:
         checks["graph"] = False
 
-    # Only retriever + groq_pool are truly required for chat to work
-    critical_ok = checks.get("retriever", False) and checks.get("groq_pool", False)
+    # Only retriever + gemini_client are truly required for chat to work
+    critical_ok = checks.get("retriever", False) and checks.get("gemini_client", False)
     status = "ok" if critical_ok else "degraded"
 
     return {

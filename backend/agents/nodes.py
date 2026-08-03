@@ -25,33 +25,37 @@ from backend.core.prompt import (
 )
 from backend.core.rag_pipeline import get_retriever, get_persona_quotes
 from backend.memory.memory_manager import get_memory
-from backend.utils.groq_rotator import get_pool
+from backend.utils.gemini_client import get_pool
 from backend.utils.safety import detect_injection, INJECTION_RESPONSE, LOOP_BREAK_CONTEXT
 from backend.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# ── Model tiers (BUG FIX: openai/gpt-oss-120b was invalid on Groq) ───────────
-FAST_MODEL       = "llama-3.1-8b-instant"       # Router, planner, grader, rewriter
-PRIMARY_GEN      = "llama-3.3-70b-versatile"    # Primary generator (BUG FIX)
-FALLBACK_GEN     = "llama-3.1-8b-instant"       # Emergency fallback generator
+# ── Model tiers (Gemini Latest) ───────────────────────────────────────────────
+FAST_MODEL       = "gemini-3.5-flash-lite"      # Fast utility tasks (router, planner, grader, rewriter)
+PRIMARY_GEN      = "gemini-3.5-flash"           # Primary generator (as requested: 3.5 flash)
+FALLBACK_GEN     = "gemini-3.5-flash-lite"      # Emergency fallback generator
 
 
-def _docs_to_context(docs: List[Dict[str, Any]], max_chars: int = 2000) -> str:
-    """Render a list of retrieved doc dicts into a single context string."""
+def _docs_to_context(docs: List[Dict[str, Any]]) -> str:
+    """Render retrieved doc dicts with per-chunk confidence + source attribution."""
     if not docs:
         return "No relevant context found."
     parts = []
-    total = 0
     for d in docs:
-        content = d.get("content", "")
-        if total + len(content) > max_chars:
-            content = content[: max_chars - total]
-        parts.append(content)
-        total += len(content)
-        if total >= max_chars:
-            break
-    return "\n\n---\n\n".join(parts)
+        meta = d.get("metadata", {})
+        # ChromaDB stores metadata values as strings — cast to float defensively
+        conf = float(d.get("confidence", 0.0) or 0.0)
+        source = meta.get("source_file", "unknown")
+        date = meta.get("date", "")
+        header = f"[Source: {source} | Date: {date} | Confidence: {conf:.0%}]"
+        parts.append(f"{header}\n{d.get('content', '')}")
+    return "\n\n━━━\n\n".join(parts)
+
+
+def _safe_ctx(s: str) -> str:
+    """Escape {{ and }} so .format() doesn't choke on curly braces in retrieved text."""
+    return s.replace("{", "{{").replace("}", "}}")  # noqa: E501
 
 
 def _docs_to_langchain(docs: List[Dict[str, Any]]) -> List[Document]:
@@ -198,45 +202,84 @@ async def hybrid_retriever(state: AgentState) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# NODE 4 — Document Grader (CRAG) — BUG FIX: parallel via asyncio.gather
+# NODE 4 — Document Grader (CRAG) — Batch & Reranker-based (0 rate limits)
 # ════════════════════════════════════════════════════════════════════════════
 async def doc_grader(state: AgentState) -> dict:
     """
-    Grade each retrieved document for relevance concurrently.
-    BUG FIX: was serial (N sequential API calls) → now concurrent.
+    Grade retrieved documents for relevance without triggering API rate limits.
+    Uses CrossEncoder reranker scores + single-call batch LLM grading if needed.
+    (Prevents 429 RESOURCE_EXHAUSTED from firing 50+ parallel LLM requests).
     """
-    question  = state["question"]
-    documents = state.get("documents", [])
+    question   = state["question"]
+    fact_docs  = state.get("fact_docs", [])
+    style_docs = state.get("style_docs", [])
+    reasoning_docs = state.get("reasoning_docs", [])
+    all_typed  = fact_docs + reasoning_docs + style_docs
     t0 = time.monotonic()
-    pool = get_pool()
 
-    if not documents:
+    if not all_typed:
         log.warning("No documents to grade.")
-        return {"doc_grade": "insufficient", "documents": []}
+        return {
+            "doc_grade": "insufficient", "documents": [],
+            "fact_docs": [], "style_docs": [], "reasoning_docs": [],
+        }
 
-    async def grade_one(doc: Document) -> bool:
+    # Step 1: Filter using CrossEncoder reranker scores (confidence >= 0.20)
+    # CrossEncoder already calculated exact neural relevance scores for all docs.
+    relevant_set = set()
+    for doc in all_typed:
+        conf = float(doc.metadata.get("confidence", doc.metadata.get("label_score", 0.5)) or 0.5)
+        if conf >= 0.20:
+            relevant_set.add(id(doc))
+
+    # Step 2: If threshold filtering yielded < 3 docs, run a SINGLE batch LLM grader call
+    if len(relevant_set) < 3 and len(all_typed) > 0:
+        pool = get_pool()
         try:
-            verdict = await pool.chat(
-                messages=[{"role": "user", "content": DOC_GRADER_PROMPT.format(
-                    question=question, document=doc.page_content[:600]
-                )}],
-                model=FAST_MODEL, temperature=0.0, max_tokens=5,
+            doc_previews = "\n".join([
+                f"[{i+1}] {doc.page_content[:200]}..." for i, doc in enumerate(all_typed[:10])
+            ])
+            prompt = (
+                f"Question: {question}\n\n"
+                f"Document Snippets:\n{doc_previews}\n\n"
+                f"Which document numbers contain relevant info to answer the question? "
+                f"Return ONLY a JSON list of numbers, e.g. [1, 3, 5]."
             )
-            return "relevant" in verdict.strip().lower()
+            raw = await pool.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=FAST_MODEL, temperature=0.0, max_tokens=60,
+            )
+            raw = raw.strip().lstrip("```json").rstrip("```").strip()
+            indices = json.loads(raw)
+            if isinstance(indices, list):
+                for idx in indices:
+                    if isinstance(idx, int) and 1 <= idx <= len(all_typed):
+                        relevant_set.add(id(all_typed[idx - 1]))
         except Exception as e:
-            log.warning(f"Grade failed for a doc: {e}")
-            return True  # include on error to avoid losing context
+            log.warning(f"Batch grader fallback exception: {e}")
+            # Fallback: keep top candidates
+            for doc in all_typed[:6]:
+                relevant_set.add(id(doc))
 
-    # BUG FIX: run all grades concurrently
-    verdicts = await asyncio.gather(*[grade_one(doc) for doc in documents])
-    relevant = [doc for doc, ok in zip(documents, verdicts) if ok]
+    # Split graded results back into typed pools
+    graded_facts     = [d for d in fact_docs if id(d) in relevant_set]
+    graded_style     = [d for d in style_docs if id(d) in relevant_set]
+    graded_reasoning = [d for d in reasoning_docs if id(d) in relevant_set]
+    all_relevant     = graded_facts + graded_reasoning + graded_style
 
-    # Need at least 2 relevant fact-style docs for sufficient grade
-    grade = "sufficient" if len(relevant) >= 2 else "insufficient"
+    grade = "sufficient" if len(all_relevant) >= 2 else "insufficient"
     log.info(
-        f"Grader: {len(relevant)}/{len(documents)} relevant → '{grade}' | {time.monotonic()-t0:.2f}s"
+        f"Grader: {len(all_relevant)}/{len(all_typed)} relevant "
+        f"(F:{len(graded_facts)} S:{len(graded_style)} R:{len(graded_reasoning)}) "
+        f"→ '{grade}' | {time.monotonic()-t0:.2f}s"
     )
-    return {"doc_grade": grade, "documents": relevant}
+    return {
+        "doc_grade": grade,
+        "documents": all_relevant,
+        "fact_docs": graded_facts,
+        "style_docs": graded_style,
+        "reasoning_docs": graded_reasoning,
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -275,11 +318,13 @@ async def generator(state: AgentState) -> dict:
       - FACTS section  → fact_docs (grounded claims)
       - REASONING section → reasoning_docs (mental models)
       - STYLE section  → style_docs (phrasing tone)
+    v3: Now passes confidence into prompt and preserves chunk metadata for context.
     """
     question      = state["question"]
-    fact_docs     = state.get("fact_docs",      state.get("documents", []))
+    fact_docs     = state.get("fact_docs",      [])
     style_docs    = state.get("style_docs",     [])
     reasoning_docs= state.get("reasoning_docs", [])
+    confidence    = state.get("confidence", 0.0)
     history       = state.get("history", [])
     mode          = state.get("mode", "text")
     session_id    = state.get("session_id", "default")
@@ -288,16 +333,18 @@ async def generator(state: AgentState) -> dict:
     pool   = get_pool()
     memory = get_memory()
 
-    # Build 3 typed context strings
-    fact_context      = _docs_to_context(
-        [{"content": d.page_content} for d in fact_docs], max_chars=2500
-    )
-    reasoning_context = _docs_to_context(
-        [{"content": d.page_content} for d in reasoning_docs], max_chars=1200
-    )
-    style_context     = _docs_to_context(
-        [{"content": d.page_content} for d in style_docs], max_chars=800
-    )
+    # Build 3 typed context strings — now with per-chunk metadata
+    def _lc_to_context_dicts(lc_docs):
+        """Convert LangChain docs back to dicts preserving metadata for _docs_to_context."""
+        return [
+            {"content": d.page_content, "metadata": d.metadata,
+             "confidence": d.metadata.get("label_score", d.metadata.get("confidence", 0.0))}
+            for d in lc_docs
+        ]
+
+    fact_context      = _docs_to_context(_lc_to_context_dicts(fact_docs))
+    reasoning_context = _docs_to_context(_lc_to_context_dicts(reasoning_docs))
+    style_context     = _docs_to_context(_lc_to_context_dicts(style_docs))
 
     # Fallback if all empty
     if fact_context == "No relevant context found." and not reasoning_docs and not style_docs:
@@ -305,10 +352,11 @@ async def generator(state: AgentState) -> dict:
 
     persona_quotes = get_persona_quotes()
     system_prompt  = MASTER_PROMPTT.format(
-        persona_quotes=persona_quotes,
-        fact_context=fact_context,
-        reasoning_context=reasoning_context,
-        style_context=style_context,
+        persona_quotes=_safe_ctx(persona_quotes),
+        fact_context=_safe_ctx(fact_context),
+        reasoning_context=_safe_ctx(reasoning_context),
+        style_context=_safe_ctx(style_context),
+        confidence=f"{confidence:.0%}",
     )
     if mode == "voice":
         system_prompt += VOICE_SUFFIX
@@ -330,7 +378,7 @@ async def generator(state: AgentState) -> dict:
                 messages=messages,
                 model=model,
                 temperature=0.3 if mode == "text" else 0.2,
-                max_tokens=512 if mode == "voice" else 1200,
+                max_tokens=512 if mode == "voice" else 8192,  # Gemini 2.5-flash: massive output budget
             )
             log.info(
                 f"Generated | model={model} mode={mode} "
@@ -348,15 +396,22 @@ async def generator(state: AgentState) -> dict:
 # NODE 7 — Hallucination Checker (Self-RAG)
 # ════════════════════════════════════════════════════════════════════════════
 async def hallucination_checker(state: AgentState) -> dict:
-    """Verify generated answer is grounded in fact_docs (not style/reasoning)."""
-    fact_docs  = state.get("fact_docs", state.get("documents", []))
-    generation = state.get("generation", "")
+    """
+    Verify generated answer is grounded in ALL context shown to generator
+    (v3 FIX: was only checking fact_docs[:4] — missed reasoning/style claims).
+    """
+    fact_docs      = state.get("fact_docs", [])
+    style_docs     = state.get("style_docs", [])
+    reasoning_docs = state.get("reasoning_docs", [])
+    generation     = state.get("generation", "")
     t0 = time.monotonic()
 
-    if not fact_docs or not generation:
+    all_docs = fact_docs + reasoning_docs + style_docs
+    if not all_docs or not generation:
         return {"hallucination_score": "skip"}
 
-    context = "\n\n".join([d.page_content[:400] for d in fact_docs[:4]])
+    # Use top docs from ALL context types, not just facts (v3 FIX)
+    context = "\n\n".join([d.page_content for d in all_docs[:8]])  # Full content for hallucination check
     pool = get_pool()
 
     try:
@@ -395,10 +450,14 @@ async def follow_up_agent(state: AgentState) -> dict:
     t0 = time.monotonic()
     pool = get_pool()
 
-    # Build retrieved context snippet from fact + reasoning docs
-    # Pick the first 3 most relevant chunks to surface unexplored threads
-    context_docs = (fact_docs + reasoning_docs)[:3]
-    retrieved_context = "\n---\n".join([d.page_content[:250] for d in context_docs])
+    # Build retrieved context snippet — sort by confidence first (v3 FIX: was list order)
+    all_context = fact_docs + reasoning_docs
+    all_context.sort(
+        key=lambda d: d.metadata.get("label_score", d.metadata.get("confidence", 0.0)),
+        reverse=True,
+    )
+    context_docs = all_context[:5]
+    retrieved_context = "\n---\n".join([d.page_content[:600] for d in context_docs])  # More context for follow-ups
     if not retrieved_context:
         retrieved_context = "No additional context available."
 
@@ -406,10 +465,10 @@ async def follow_up_agent(state: AgentState) -> dict:
         raw = await pool.chat(
             messages=[{"role": "user", "content": FOLLOW_UP_PROMPT.format(
                 question=question,
-                answer=generation[:500],
-                retrieved_context=retrieved_context[:800],
+                answer=generation[:1000],
+                retrieved_context=retrieved_context[:2000],
             )}],
-            model=FAST_MODEL, temperature=0.5, max_tokens=180,
+            model=FAST_MODEL, temperature=0.5, max_tokens=250,
         )
         raw = raw.strip()
         if "```" in raw:
@@ -444,10 +503,11 @@ async def direct_response(state: AgentState) -> dict:
     pool = get_pool()
     persona_quotes = get_persona_quotes()
     system = MASTER_PROMPTT.format(
-        persona_quotes=persona_quotes,
+        persona_quotes=_safe_ctx(persona_quotes),
         fact_context="",
         reasoning_context="",
         style_context="",
+        confidence="N/A (direct response)",
     )
     try:
         generation = await pool.chat(

@@ -91,7 +91,7 @@ def _jaccard_sim(text_a: str, text_b: str) -> float:
 
 def _mmr(
     candidates: List[Dict[str, Any]],
-    top_k: int = 4,
+    top_k: int = 12,         # Increased: more diverse chunks kept (was 4)
     lambda_param: float = 0.75,
 ) -> List[Dict[str, Any]]:
     """
@@ -272,7 +272,8 @@ class TripleHybridRetriever:
 
         # Sparse (BM25)
         if self._bm25.get(ctype) and self._bm25_corpus[ctype]:
-            scores = self._bm25[ctype].get_scores(query.split())
+            tokens = query.lower().split()  # v3 FIX: lowercase for BM25 matching
+            scores = self._bm25[ctype].get_scores(tokens)
             top_idx = np.argsort(scores)[::-1][:top_k * 2]
             for rank, idx in enumerate(top_idx):
                 if idx >= len(self._bm25_corpus[ctype]):
@@ -304,7 +305,7 @@ class TripleHybridRetriever:
     def retrieve_typed(
         self,
         queries: List[str],
-        top_k_per_type: int = 4,
+        top_k_per_type: int = 20,  # Increased from 8 — more raw candidates for reranking
         expand_parents: bool = True,
     ) -> Tuple[List[Dict], List[Dict], List[Dict]]:
         """
@@ -337,6 +338,7 @@ class TripleHybridRetriever:
                 results_per_type[ctype] = []
                 continue
 
+            # CrossEncoder rerank
             pairs  = [[main_query, d["content"]] for d in docs]
             scores = self._reranker.predict(pairs)
 
@@ -348,14 +350,14 @@ class TripleHybridRetriever:
 
             docs.sort(key=lambda x: x["confidence"], reverse=True)
 
-            # MMR — enforce diversity after reranking (filters near-duplicates)
-            docs = _mmr(docs, top_k=top_k_per_type, lambda_param=0.75)
-
-            # Parent expansion
+            # Parent expansion FIRST (v3 FIX: moved BEFORE MMR)
             if expand_parents:
-                docs = [self._expand_to_parent(d) for d in docs[:top_k_per_type]]
-            else:
-                docs = docs[:top_k_per_type]
+                docs = [self._expand_to_parent(d) for d in docs[:top_k_per_type * 2]]
+
+            # MMR — enforce diversity AFTER parent expansion (v3 FIX)
+            # This ensures diversity is measured on the actual content the model sees,
+            # not on 400-char children that might expand to overlapping parents.
+            docs = _mmr(docs, top_k=top_k_per_type, lambda_param=0.75)  # top_k matches per-type budget
 
             results_per_type[ctype] = docs
             log.debug(f"[{ctype}] top-{len(docs)} | best_conf={docs[0]['confidence']:.3f}" if docs else f"[{ctype}] 0 results")
@@ -363,6 +365,24 @@ class TripleHybridRetriever:
         fact_res      = results_per_type.get("fact", [])
         style_res     = results_per_type.get("style", [])
         reasoning_res = results_per_type.get("reasoning", [])
+
+        # v3 FIX: Cross-collection deduplication
+        # Multi-label ingestion can place the same chunk in multiple collections.
+        # After parent expansion, this leads to identical content in multiple context sections.
+        seen_content_hashes = set()
+        def _dedup(docs_list):
+            deduped = []
+            for d in docs_list:
+                content_hash = hash(d.get("content", "")[:200])  # fast hash on content prefix
+                if content_hash not in seen_content_hashes:
+                    seen_content_hashes.add(content_hash)
+                    deduped.append(d)
+            return deduped
+
+        # Dedup in priority order: facts first, then reasoning, then style
+        fact_res      = _dedup(fact_res)
+        reasoning_res = _dedup(reasoning_res)
+        style_res     = _dedup(style_res)
 
         log.info(
             f"TripleRetriever | facts={len(fact_res)} style={len(style_res)} "
@@ -390,7 +410,7 @@ def get_persona_quotes() -> str:
                 data = _json.load(f)
             quotes = data.get("exact_quotes", [])
             if quotes:
-                sample = quotes[:10]  # cap to avoid overstuffing system prompt
+                sample = quotes[:20]  # Increased from 10 for richer style grounding
                 return "\n".join([f'• "{q}"' for q in sample])
         except Exception as e:
             log.warning(f"Could not load persona quotes: {e}")
