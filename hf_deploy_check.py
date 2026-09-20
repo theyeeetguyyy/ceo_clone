@@ -8,7 +8,7 @@ Usage:
     python hf_deploy_check.py
 
 Checks:
-  ✅ GROQ_API_KEYS is set in environment
+  ✅ GEMINI_API_KEY is set in environment
   ✅ All RAG data files exist and have non-trivial sizes
   ✅ ChromaDB collections are accessible and populated
   ✅ BM25 indexes load correctly
@@ -70,13 +70,12 @@ section("1. Environment Variables")
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
-groq_keys = os.getenv("GROQ_API_KEYS", os.getenv("GROQ_API_KEY", ""))
-if groq_keys and groq_keys.strip():
-    keys = [k.strip() for k in groq_keys.split(",") if k.strip()]
-    ok(f"GROQ_API_KEYS set ({len(keys)} key(s) found)")
+gemini_key = os.getenv("GEMINI_API_KEY", "")
+if gemini_key.strip():
+    ok(f"GEMINI_API_KEY set (...{gemini_key.strip()[-6:]})")
 else:
     fail(
-        "GROQ_API_KEYS not set!\n"
+        "GEMINI_API_KEY not set!\n"
         "     → Add it to HF Spaces: Settings → Variables and Secrets\n"
         "     → Or add it to .env for local testing"
     )
@@ -238,12 +237,11 @@ import_checks = [
     ("fastapi", "FastAPI"),
     ("langchain", "langchain"),
     ("langchain_core", "langchain-core"),
-    ("langchain_groq", "langchain-groq"),
     ("langgraph", "langgraph"),
     ("chromadb", "chromadb"),
     ("sentence_transformers", "sentence-transformers"),
     ("rank_bm25", "rank-bm25"),
-    ("groq", "groq"),
+    ("google.genai", "google-genai"),
     ("slowapi", "slowapi"),
     ("loguru", "loguru"),
     ("numpy", "numpy"),

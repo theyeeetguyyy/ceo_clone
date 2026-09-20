@@ -12,7 +12,7 @@ tags:
   - langchain
   - langgraph
   - fastapi
-  - groq
+  - gemini
   - sentence-transformers
   - chromadb
 ---
@@ -39,10 +39,11 @@ It features a **LangGraph state machine**, **multi-label semantic routing**, a *
 
 ### 1. Environment Setup
 
-Create a `.env` file in the root directory and add your Groq API keys (comma-separated if you have multiple to enable automatic rate-limit rotation):
+Create a `.env` file in the root directory and add your Gemini API key:
 ```env
-GROQ_API_KEYS=your_groq_api_key_1,your_groq_api_key_2
+GEMINI_API_KEY=your_gemini_api_key
 ```
+On Hugging Face Spaces the same key goes in **Settings -> Variables and secrets** as `GEMINI_API_KEY`.
 
 ### 2. Backend Setup (Terminal 1)
 
