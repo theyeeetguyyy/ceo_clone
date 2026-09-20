@@ -1,22 +1,34 @@
 """
-Voice API — Groq Whisper STT transcription endpoint.
+Voice API — Gemini STT transcription endpoint.
 POST /api/voice/transcribe — multipart audio → transcript text
 
-BUG FIX: Now uses GroqKeyPool for rate-limit resilience instead of raw client.
+Migrated off Groq Whisper; the app now talks to Gemini only.
 """
 
 from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from backend.utils.groq_rotator import get_pool
+from backend.utils.gemini_client import get_pool
 from backend.utils.logger import get_logger
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 limiter = Limiter(key_func=get_remote_address)
 
-SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg"}
+# Extension → MIME type Gemini accepts for inline audio parts.
+SUPPORTED_FORMATS = {
+    ".mp3":  "audio/mp3",
+    ".mpeg": "audio/mpeg",
+    ".mpga": "audio/mpeg",
+    ".m4a":  "audio/mp4",
+    ".mp4":  "audio/mp4",
+    ".wav":  "audio/wav",
+    ".webm": "audio/webm",
+    ".ogg":  "audio/ogg",
+    ".aac":  "audio/aac",
+    ".flac": "audio/flac",
+}
 MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
@@ -24,16 +36,17 @@ MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10 MB
 @limiter.limit("5/minute")
 async def transcribe_audio(request: Request, audio: UploadFile = File(...)):
     """
-    Transcribe audio using Groq Whisper API.
+    Transcribe audio using the Gemini speech-to-text model.
     Returns the transcript text.
     Accepts: wav, mp3, webm, ogg, m4a, etc.
     Rate limited: 5 requests/min per IP. Max file size: 10 MB.
     """
     suffix = Path(audio.filename or "audio.webm").suffix.lower()
-    if suffix not in SUPPORTED_FORMATS:
+    mime_type = SUPPORTED_FORMATS.get(suffix)
+    if mime_type is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported audio format: {suffix}. Supported: {SUPPORTED_FORMATS}"
+            detail=f"Unsupported audio format: {suffix}. Supported: {sorted(SUPPORTED_FORMATS)}"
         )
 
     audio_bytes = await audio.read()
@@ -44,18 +57,10 @@ async def transcribe_audio(request: Request, audio: UploadFile = File(...)):
         )
     log.info(f"Transcribing audio | format={suffix} | size={len(audio_bytes)/1024:.1f}KB")
 
-    # BUG FIX: use GroqKeyPool for rate-limit rotation instead of raw client
     pool = get_pool()
-    client = pool.get_client()
 
     try:
-        transcription = client.audio.transcriptions.create(
-            model="whisper-large-v3-turbo",
-            file=(f"audio{suffix}", audio_bytes, f"audio/{suffix.lstrip('.')}"),
-            response_format="text",
-            language="en",
-        )
-        transcript = str(transcription).strip()
+        transcript = await pool.transcribe(audio_bytes, mime_type)
         log.info(f"Transcription: '{transcript[:100]}'")
         return {"transcript": transcript, "format": suffix}
 

@@ -2,7 +2,7 @@
 LangGraph Agent Nodes v2 — CEO Digital Twin
 ============================================
 All 8 nodes + 2 terminal nodes. Bug fixes applied:
-  - GEN_MODEL fixed (was invalid openai/gpt-oss-120b → llama-3.3-70b-versatile)
+  - all LLM calls run on Gemini (Groq/Llama removed entirely)
   - doc_grader now runs all grades concurrently via asyncio.gather()
   - hybrid_retriever uses TripleHybridRetriever, populates typed doc fields
   - generator uses 3-section structured prompt (facts / reasoning / style)
